@@ -1,0 +1,89 @@
+const SHEET_ID = '1j5AwTbWzZOJO4VrkuH3cbhZ4a2RndC6xodEYew2GAj0';
+const FOLDER_ID = '1hmenQF7tVHF4zlXfnBk1LIDdKjD_9kUw';
+
+function doPost(e) {
+  try {
+    let data;
+    const raw = e.parameter.data;
+    if (raw) {
+      data = JSON.parse(raw);
+    } else {
+      data = JSON.parse(e.postData.contents);
+    }
+
+    const ss = SpreadsheetApp.openById(SHEET_ID);
+    let sheet = ss.getSheetByName('Reportes');
+    if (!sheet) {
+      sheet = ss.insertSheet('Reportes');
+      sheet.appendRow(['ID','Fecha','Tipo','Subtipo','Área','Máquina',
+                       'Descripción','Nombre','NumEmpleado','Estado','FotoURL']);
+    }
+
+    let fotoUrl = '';
+    if (data.fotoBase64) {
+      fotoUrl = guardarFoto(data.fotoBase64, data.id) || '';
+    }
+
+    sheet.appendRow([
+      data.id, data.fecha, data.tipo, data.subtipo,
+      data.area, data.maq, data.desc,
+      data.nombre||'', data.numEmpleado||'',
+      'Abierto', fotoUrl
+    ]);
+
+    if (data.correos && data.correos.length > 0) {
+      const asunto = '[CriotecEHS] ' + (data.tipo==='inc'?'Incidente':'Condición insegura') + ' – ' + data.area + ' – ' + data.fecha;
+      const cuerpo = 'Área: ' + data.area + '\nEquipo: ' + (data.maq||'N/A') + '\nDescripción: ' + data.desc + '\nFecha: ' + data.fecha + '\nReporta: ' + (data.nombre||'N/A') + ' (Emp. ' + (data.numEmpleado||'N/A') + ')\nEstado: Abierto' + (fotoUrl?'\nFoto: '+fotoUrl:'');
+      data.correos.forEach(email => GmailApp.sendEmail(email, asunto, cuerpo));
+    }
+
+    return ContentService.createTextOutput(JSON.stringify({ok:true}))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch(err) {
+    return ContentService.createTextOutput(JSON.stringify({ok:false,error:err.message}))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function guardarFoto(base64Data, id) {
+  try {
+    const parts = base64Data.split(',');
+    const mime = parts[0].match(/:(.*?);/)[1];
+    const ext = mime.split('/')[1];
+    const decoded = Utilities.base64Decode(parts[1]);
+    const blob = Utilities.newBlob(decoded, mime, 'foto_'+id+'.'+ext);
+    const folder = DriveApp.getFolderById(FOLDER_ID);
+    const file = folder.createFile(blob);
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    return 'https://drive.google.com/uc?export=view&id='+file.getId();
+  } catch(err) {
+    return null;
+  }
+}
+
+function doGet(e) {
+  const callback = e.parameter.callback;
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const sheet = ss.getSheetByName('Reportes');
+  let result = {reportes:[]};
+  if (sheet) {
+    const rows = sheet.getDataRange().getValues();
+    const headers = rows[0];
+    result.reportes = rows.slice(1).map(r => {
+      let obj = {};
+      headers.forEach((h,i) => obj[h] = r[i]);
+      return obj;
+    });
+  }
+  const json = JSON.stringify(result);
+  if (callback) {
+    return ContentService.createTextOutput(callback+'('+json+')')
+      .setMimeType(ContentService.MimeType.JAVASCRIPT);
+  }
+  return ContentService.createTextOutput(json)
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function authDrive() {
+  DriveApp.getRootFolder();
+}
